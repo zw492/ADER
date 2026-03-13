@@ -1,0 +1,341 @@
+"""
+ADER Assignment — Master Plotting Script
+Generates all figures and the convergence table for the report.
+
+Outputs (saved to ./figures/):
+  fig_3_1_convergence_table.png
+  fig_3_1_convergence_plot.png
+  fig_3_2_sod.png
+  fig_3_2_lax.png
+  fig_3_3_rho_ader3.png
+  fig_3_3_rho_muscl.png
+  fig_3_3_rho_comparison.png
+  fig_3_3_u_comparison.png
+  fig_3_3_p_comparison.png
+  fig_3_4a_visual.png
+  fig_3_4b_efficiency.png
+"""
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.stats import linregress
+import os
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DATA = _HERE + "/"
+OUT  = _HERE + "/"
+
+plt.rcParams.update({
+    "font.family":    "serif",
+    "font.size":      11,
+    "axes.titlesize": 12,
+    "axes.labelsize": 11,
+    "legend.fontsize": 9,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "figure.dpi":     150,
+    "lines.linewidth": 1.4,
+})
+
+COL_ADER3 = "#1f77b4"
+COL_MUSCL = "#d62728"
+COL_EXACT = "#2ca02c"
+
+
+# 3.1  Convergence table + log-log plot
+
+cv = pd.read_csv(DATA + "convergence_table_T2.csv")
+
+def fmt_rate(v):
+    return "—" if (isinstance(v, float) and np.isnan(v)) else f"{v:.2f}"
+
+def fmt_sci(v):
+    return f"{v:.3e}"
+
+rows_muscl = cv[cv.scheme == "MUSCL"].reset_index(drop=True)
+rows_ader  = cv[cv.scheme == "ADER3"].reset_index(drop=True)
+rows_order = pd.concat([rows_muscl, rows_ader], ignore_index=True)
+
+col_labels = ["Scheme", "N", r"$\Delta x$",
+              r"$\|e\|_{L^1}$", r"$r_{L^1}$",
+              r"$\|e\|_{L^2}$", r"$r_{L^2}$",
+              r"$\|e\|_{L^\infty}$", r"$r_{L^\infty}$"]
+
+table_data = []
+for _, row in rows_order.iterrows():
+    table_data.append([
+        row["scheme"],
+        int(row["N"]),
+        fmt_sci(row["dx"]),
+        fmt_sci(row["L1"]),   fmt_rate(row["rate_L1"]),
+        fmt_sci(row["L2"]),   fmt_rate(row["rate_L2"]),
+        fmt_sci(row["Linf"]), fmt_rate(row["rate_Linf"]),
+    ])
+
+fig, ax = plt.subplots(figsize=(14, 4.4))
+ax.axis("off")
+tbl = ax.table(cellText=table_data, colLabels=col_labels,
+               cellLoc="center", loc="center")
+tbl.auto_set_font_size(False)
+tbl.set_fontsize(9.5)
+tbl.scale(1, 1.6)
+
+for j in range(len(col_labels)):
+    tbl[(0, j)].set_facecolor("#2c3e50")
+    tbl[(0, j)].set_text_props(color="white", fontweight="bold")
+
+n_muscl = len(rows_muscl)
+for i, row in enumerate(rows_order.itertuples(), start=1):
+    colour = "#dce9f7" if row.scheme == "ADER3" else "#fde8e8"
+    for j in range(len(col_labels)):
+        tbl[(i, j)].set_facecolor(colour)
+
+plt.title(
+    r"Table 1: Density error norms at $T_{\rm out}=2$ — problem (1), $\gamma=1.4$, periodic BC",
+    fontsize=11, pad=10)
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_1_convergence_table.png", bbox_inches="tight")
+plt.close()
+print("Saved fig_3_1_convergence_table.png")
+
+# log-log convergence plot
+fig, axes = plt.subplots(1, 3, figsize=(13, 4.5))
+norm_cols   = ["L1",     "L2",     "Linf"]
+norm_labels = [r"$L^1$", r"$L^2$", r"$L^\infty$"]
+
+for ax, nc, nl in zip(axes, norm_cols, norm_labels):
+    for scheme, col, mk, ls in [("MUSCL", COL_MUSCL, "s", "--"),
+                                ("ADER3", COL_ADER3, "o", "-")]:
+        sub = cv[cv.scheme == scheme].sort_values("N")
+        ax.loglog(sub["dx"], sub[nc], color=col, marker=mk,
+                  linestyle=ls, label=scheme, markersize=5)
+
+    # Reference slopes anchored at data midpoints
+    dx_all = cv["dx"].values
+    dx_ref = np.logspace(np.log10(dx_all.min()*0.8), np.log10(dx_all.max()*1.2), 50)
+    for p, scheme_ref, col in [(2, "MUSCL", COL_MUSCL), (3, "ADER3", COL_ADER3)]:
+        sub = cv[cv.scheme == scheme_ref].sort_values("N")
+        mid = len(sub)//2
+        c = sub[nc].iloc[mid] / sub["dx"].iloc[mid]**p
+        ax.loglog(dx_ref, c * dx_ref**p, color=col, ls=":", alpha=0.55,
+                  lw=1.1, label=f"$O(\\Delta x^{p})$")
+
+    ax.set_xlabel(r"$\Delta x$")
+    ax.set_ylabel(f"Density error ({nl})")
+    ax.set_title(f"{nl} norm")
+    ax.legend(fontsize=8)
+    ax.grid(True, which="both", ls=":", alpha=0.45)
+
+plt.suptitle(r"Task 3.1: Convergence — $T_{\rm out}=2$, problem (1)", fontsize=12, y=1.02)
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_1_convergence_plot.png", bbox_inches="tight")
+plt.close()
+print("Saved fig_3_1_convergence_plot.png")
+
+
+# 3.2  Riemann tests
+
+def plot_riemann(test_name, Tout, x0):
+    a3 = pd.read_csv(DATA + f"{test_name}_ADER3.csv")
+    mu = pd.read_csv(DATA + f"{test_name}_MUSCL.csv")
+
+    var_cols   = ["rho",                 "u",                 "p"]
+    var_labels = [r"Density $\rho$",    r"Velocity $u$",     r"Pressure $p$"]
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.2))
+    for ax, vc, vl in zip(axes, var_cols, var_labels):
+        ax.plot(a3["x"], a3[f"{vc}_ex"],  color=COL_EXACT, lw=2.2,
+                label="Exact", zorder=3)
+        ax.plot(mu["x"], mu[f"{vc}_num"], color=COL_MUSCL, lw=1.2, ls="--",
+                label="MUSCL (MC)", zorder=2)
+        ax.plot(a3["x"], a3[f"{vc}_num"], color=COL_ADER3, lw=1.2, ls="-",
+                label="ADER3", zorder=2)
+        ax.set_xlabel(r"$x$")
+        ax.set_ylabel(vl)
+        ax.set_title(vl)
+        ax.legend(fontsize=8.5)
+        ax.grid(True, ls=":", alpha=0.4)
+
+    plt.suptitle(
+        f"Task 3.2: {test_name} test — $N=200$, $T_{{\\rm out}}={Tout}$, $x_0={x0}$",
+        fontsize=12, y=1.02)
+    plt.tight_layout()
+    fname = OUT + f"fig_3_2_{test_name.lower()}.png"
+    plt.savefig(fname, bbox_inches="tight")
+    plt.close()
+    print(f"Saved {fname}")
+
+plot_riemann("Sod", 0.2,  0.5)
+plot_riemann("Lax", 0.14, 0.6)
+
+
+# 3.3  Shock-turbulence
+
+a3 = pd.read_csv(DATA + "ShockTurb_ADER3.csv")
+mu = pd.read_csv(DATA + "ShockTurb_MUSCL.csv")
+
+XMIN, XMAX = -2.5, 3.5
+subtitle = r"$T_{\rm out}=5$, $N=2000$, $\varepsilon=0.1$, $k=20\pi$"
+
+# ADER3 only (scatter + line)
+fig, ax = plt.subplots(figsize=(10, 4.5))
+ax.plot(a3["x"], a3["rho"], color=COL_ADER3, lw=0.7, zorder=2)
+ax.scatter(a3["x"], a3["rho"], color=COL_ADER3, s=5, zorder=3, label="ADER3")
+ax.set_xlabel(r"$x$"); ax.set_ylabel(r"Density $\rho$")
+ax.set_xlim(XMIN, XMAX); ax.set_ylim(bottom=0.85)
+ax.set_title(fr"Task 3.3: ADER3 density — {subtitle}")
+ax.legend(); ax.grid(True, ls=":", alpha=0.4)
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_3_rho_ader3.png", bbox_inches="tight"); plt.close()
+print("Saved fig_3_3_rho_ader3.png")
+
+# MUSCL only
+fig, ax = plt.subplots(figsize=(10, 4.5))
+ax.plot(mu["x"], mu["rho"], color=COL_MUSCL, lw=0.7, zorder=2)
+ax.scatter(mu["x"], mu["rho"], color=COL_MUSCL, s=5, zorder=3, label="MUSCL (Van Leer)")
+ax.set_xlabel(r"$x$"); ax.set_ylabel(r"Density $\rho$")
+ax.set_xlim(XMIN, XMAX); ax.set_ylim(bottom=0.85)
+ax.set_title(fr"Task 3.3: MUSCL/Van Leer density — {subtitle}")
+ax.legend(); ax.grid(True, ls=":", alpha=0.4)
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_3_rho_muscl.png", bbox_inches="tight"); plt.close()
+print("Saved fig_3_3_rho_muscl.png")
+
+# rho comparison
+fig, ax = plt.subplots(figsize=(10, 4.5))
+ax.plot(a3["x"], a3["rho"], color=COL_ADER3, lw=1.2, label="ADER3")
+ax.plot(mu["x"], mu["rho"], color=COL_MUSCL, lw=1.2, ls="--", label="MUSCL (Van Leer)")
+ax.set_xlabel(r"$x$"); ax.set_ylabel(r"Density $\rho$")
+ax.set_xlim(XMIN, XMAX); ax.set_ylim(bottom=0.85)
+ax.set_title(fr"Task 3.3: ADER3 vs MUSCL — density — {subtitle}")
+ax.legend(); ax.grid(True, ls=":", alpha=0.4)
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_3_rho_comparison.png", bbox_inches="tight"); plt.close()
+print("Saved fig_3_3_rho_comparison.png")
+
+# u comparison
+fig, ax = plt.subplots(figsize=(10, 4.5))
+ax.plot(a3["x"], a3["u"], color=COL_ADER3, lw=1.2, label="ADER3")
+ax.plot(mu["x"], mu["u"], color=COL_MUSCL, lw=1.2, ls="--", label="MUSCL (Van Leer)")
+ax.set_xlabel(r"$x$"); ax.set_ylabel(r"Velocity $u$")
+ax.set_xlim(XMIN, XMAX)
+ax.set_title(fr"Task 3.3: ADER3 vs MUSCL — velocity — {subtitle}")
+ax.legend(); ax.grid(True, ls=":", alpha=0.4)
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_3_u_comparison.png", bbox_inches="tight"); plt.close()
+print("Saved fig_3_3_u_comparison.png")
+
+# p comparison
+fig, ax = plt.subplots(figsize=(10, 4.5))
+ax.plot(a3["x"], a3["p"], color=COL_ADER3, lw=1.2, label="ADER3")
+ax.plot(mu["x"], mu["p"], color=COL_MUSCL, lw=1.2, ls="--", label="MUSCL (Van Leer)")
+ax.set_xlabel(r"$x$"); ax.set_ylabel(r"Pressure $p$")
+ax.set_xlim(XMIN, XMAX)
+ax.set_title(fr"Task 3.3: ADER3 vs MUSCL — pressure — {subtitle}")
+ax.legend(); ax.grid(True, ls=":", alpha=0.4)
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_3_p_comparison.png", bbox_inches="tight"); plt.close()
+print("Saved fig_3_3_p_comparison.png")
+
+
+# 3.4A  Visual comparison N=100, T=100
+vis = pd.read_csv(DATA + "Visual_N100_T100.csv")
+
+fig, ax = plt.subplots(figsize=(10, 4.5))
+ax.plot(vis["x"], vis["rho_exact"], color=COL_EXACT, lw=2.2, label="Exact")
+ax.plot(vis["x"], vis["rho_MUSCL"], color=COL_MUSCL, lw=1.3, ls="--",
+        label="MUSCL (no limiter)")
+ax.plot(vis["x"], vis["rho_ADER3"], color=COL_ADER3, lw=1.3, ls="-",
+        label="ADER3")
+ax.set_xlabel(r"$x$"); ax.set_ylabel(r"Density $\rho$")
+ax.set_xlim(-1, 1)
+ax.set_title(r"Task 3.4A: Density at $T_{\rm out}=100$, $N=100$")
+ax.legend(); ax.grid(True, ls=":", alpha=0.4)
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_4a_visual.png", bbox_inches="tight"); plt.close()
+print("Saved fig_3_4a_visual.png")
+
+
+# 3.4B  Efficiency log-log plot
+eff = pd.read_csv(DATA + "Efficiency_T100.csv")
+ader_all  = eff[eff.scheme == "ADER3"].sort_values("N").reset_index(drop=True)
+muscl_all = eff[eff.scheme == "MUSCL"].sort_values("N").reset_index(drop=True)
+
+TARGET = 1e-3
+
+def fit_loglog(err_arr, time_arr, target):
+    """Returns (err_plot, t_plot, slope, t_cross) where axes are (time, error)."""
+    lx = np.log10(err_arr)
+    ly = np.log10(time_arr)
+    b, a, *_ = linregress(lx, ly)
+    t_cross = 10.0 ** (a + b * np.log10(target))
+    err_plot = np.logspace(np.log10(target * 0.3),
+                           np.log10(err_arr.max() * 1.5), 200)
+    t_plot   = 10.0 ** (a + b * np.log10(err_plot))
+    return err_plot, t_plot, b, t_cross
+
+fig, ax = plt.subplots(figsize=(9, 6.5))
+
+# scatter data points
+ax.scatter(ader_all["runtime_sec"], ader_all["L2_rho"],
+           color=COL_ADER3, marker="o", s=55, zorder=6, label="ADER3 data")
+ax.scatter(muscl_all["runtime_sec"], muscl_all["L2_rho"],
+           color=COL_MUSCL, marker="s", s=55, zorder=6, label="MUSCL data")
+
+# Annotate N values
+for _, row in ader_all.iterrows():
+    ax.annotate(f"N={int(row.N)}", (row.runtime_sec, row.L2_rho),
+                textcoords="offset points", xytext=(5, 3),
+                fontsize=7, color=COL_ADER3, zorder=7)
+for _, row in muscl_all.iterrows():
+    ax.annotate(f"N={int(row.N)}", (row.runtime_sec, row.L2_rho),
+                textcoords="offset points", xytext=(5, -11),
+                fontsize=7, color=COL_MUSCL, zorder=7)
+
+# ADER3 fit using all points
+ep_a, tp_a, b_a, tc_a = fit_loglog(ader_all["L2_rho"].values,
+                                   ader_all["runtime_sec"].values, TARGET)
+ax.plot(tp_a, ep_a, color=COL_ADER3, lw=1.8, ls="-",
+        label=fr"ADER3 fit  (slope $b={b_a:.3f}$)")
+print(f"ADER3 ALL: slope={b_a:.4f}, crossing at {tc_a:.1f} s")
+
+# MUSCL fit using all points
+ep_m, tp_m, b_m, tc_m = fit_loglog(muscl_all["L2_rho"].values,
+                                   muscl_all["runtime_sec"].values, TARGET)
+ax.plot(tp_m, ep_m, color=COL_MUSCL, lw=1.8, ls="-",
+        label=fr"MUSCL fit  (slope $b={b_m:.3f}$)")
+print(f"MUSCL ALL: slope={b_m:.4f}, crossing at {tc_m:.1f} s")
+
+# threshold
+t_range = [min(ader_all["runtime_sec"].min(), muscl_all["runtime_sec"].min()) * 0.3,
+           max(ader_all["runtime_sec"].max(), muscl_all["runtime_sec"].max()) * 5.0]
+ax.axhline(TARGET, color="k", lw=1.5, ls=":", zorder=4,
+           label=r"Target: $L^2 = 10^{-3}$")
+
+# Mark crossings on threshold line
+for tc, col, mk in [(tc_a, COL_ADER3, "^"), (tc_m, COL_MUSCL, "^")]:
+    if t_range[0] < tc < t_range[1] * 10:
+        ax.scatter([tc], [TARGET], color=col, marker=mk, s=80, zorder=8)
+
+ax.set_xscale("log"); ax.set_yscale("log")
+ax.set_xlabel(r"CPU time [s]", fontsize=11)
+ax.set_ylabel(r"$L^2$ density error", fontsize=11)
+ax.set_xlim(t_range)
+ax.set_title(r"Task 3.4B: Efficiency — $T_{\rm out}=100$, problem (1), $\gamma=1.4$",
+             fontsize=12)
+ax.legend(loc="lower left", fontsize=8.5, framealpha=0.9)
+ax.grid(True, which="both", ls=":", alpha=0.4)
+
+ax.text(0.98, 0.97,
+        r"Theory: ADER3 slope $\approx -2/3$,  MUSCL slope $\approx -1$",
+        transform=ax.transAxes, fontsize=8.5, ha="right", va="top", color="dimgray",
+        bbox=dict(fc="white", ec="lightgray", alpha=0.85, pad=3))
+
+plt.tight_layout()
+plt.savefig(OUT + "fig_3_4b_efficiency.png", bbox_inches="tight"); plt.close()
+print("Saved fig_3_4b_efficiency.png")
+
+print("\n=== ALL FIGURES SAVED TO", OUT, "===")
