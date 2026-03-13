@@ -28,7 +28,7 @@ All other source files are header-only and are `#include`d directly by `mainADER
 ./mainADER
 ```
 
-The executable runs all verification steps and all four tasks sequentially in a single invocation. **Expected total wall-clock time: approximately 3–4 hours** on a modern laptop at `-O0` (dominated by Task 3.4 efficiency sweep).
+The executable runs all verification steps and all four tasks sequentially in a single invocation.
 
 ---
 
