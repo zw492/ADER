@@ -52,7 +52,7 @@ All CSV files are written to the working directory.
 Once all CSV files have been produced, run:
 
 ```bash
-python plot_all_ADER.py
+plot_all_ADER
 ```
 
 Requires Python 3 with NumPy, pandas, Matplotlib, and SciPy. The script reads each CSV file listed above and writes all report figures to the `figures/` directory.
