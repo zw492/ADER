@@ -75,7 +75,7 @@ Requires Python 3 with NumPy, pandas, Matplotlib, and SciPy. The script reads ea
 
 - **WENO reconstruction**: degree M=2 (`WENO1d(PolyDegree=2, dx)`), three candidate stencils, fifth-order spatial accuracy in smooth regions. Supplies interface values Q^{L,R} and first/second spatial derivatives Q^{L,R}_x, Q^{L,R}_{xx} at each interface.
 - **Leading-order Riemann solve**: Toro exact Euler solver (`ExactRiemannEuler1D.h`) gives Godunov state Q₀ = R(0; Q^L, Q^R).
-- **Characteristic upwinding**: eigensystem of A(Q₀) — the Jacobian evaluated at Q₀, not a Roe average — upwinds the reconstructed spatial derivatives.
+- **Characteristic upwinding**: eigensystem of A(Q₀), the Jacobian evaluated at Q₀, upwinds the reconstructed spatial derivatives.
 - **CK procedure** (`CK_Euler.h`): computes Q_t and Q_tt from (Q₀, Q⁰_x, Q⁰_xx) via the PDE identity Q_t = −A Q_x.
 - **Time-averaged flux**: **2-point Gauss–Legendre quadrature** on [0, Δt] with nodes γ_{1,2} = (Δt/2)(1 ∓ 1/√3) and equal weights ω = 1/2. Integrates the quadratic-in-τ integrand F(J(τ)) to third-order accuracy. The nonlinear flux F is evaluated directly at each quadrature state without linearisation.
 
@@ -83,7 +83,7 @@ Requires Python 3 with NumPy, pandas, Matplotlib, and SciPy. The script reads ea
 
 | Task | MUSCL limiter |
 |---|---|
-| 3.1 Convergence | None (unlimited linear reconstruction) |
+| 3.1 Convergence | None |
 | 3.2 Riemann tests (Sod, Lax) | MC (Monotonized Central) |
 | 3.3 Shock–turbulence | Van Leer |
 | 3.4 Efficiency | None |
